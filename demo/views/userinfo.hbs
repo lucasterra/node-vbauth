@@ -1,0 +1,22 @@
+<div class="container">
+  <form class="form-signin" action="/logout" method="post">
+    <h2>vBUser{{#unless vbuser.userid}} <small><a href="/login">(Login)</a></small>{{/unless}}</h2>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each vbuser}}
+          <tr>
+            <td>{{@key}}</td>
+            <td>{{this}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
+    {{#if vbuser.userid}}<button class="btn btn-lg btn-primary btn-block" type="submit">Logout</button>{{/if}}
+  </form>
+</div>

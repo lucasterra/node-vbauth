@@ -1,0 +1,7 @@
+<div class="container">
+	<h2>{{message}}</h1>
+	<h3>{{error.status}}</h2>
+	{{#if error.stack}}
+		<pre>{{error.stack}}</pre>
+	{{/if}}
+</div>
