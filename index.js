@@ -1,7 +1,5 @@
 /* eslint no-underscore-dangle: ["off"] */
-/* eslint no-console: ["error", { allow: ["warn", "error"] }] */
 /* eslint class-methods-use-this: "error"*/
-/* eslint comma-dangle: ["error", {"arrays": "always-multiline", "objects": "always-multiline", "functions": "ignore"}] */
 const crypto = require('crypto');
 const moment = require('moment');
 const _debug = require('debug');
@@ -118,6 +116,14 @@ class VBAuth {
     this.isModerator = options.isModerator || _isModerator;
     this.isAdmin = options.isAdmin || _isAdmin;
 
+    if (typeof this.options.refreshActivity === 'function') {
+      this.refreshActivity = this.options.refreshActivity;
+    } else if (this.options.refreshActivity === true) {
+      this.refreshActivity = () => true;
+    } else {
+      this.refreshActivity = () => false;
+    }
+
     // enable query logging
     if (debug.enabled) {
       const originalQuery = this.database.query;
@@ -136,15 +142,15 @@ class VBAuth {
 
   // Removes ipv6 from ip
   static _getIpv4(ip) {
-    /* eslint no-param-reassign: ["off"] */
-    ip = ip || '';
-    return ip.slice(ip.lastIndexOf(':') + 1);
+    /* eslint no-param-reassign: "off"*/
+    const tmpIp = ip || '';
+    return tmpIp.slice(tmpIp.lastIndexOf(':') + 1);
   }
 
   // Cuts off the the last sessions of an ip address
   static _getSubstrIp(ip, octectLength, defaultOctectLength) {
     let length = octectLength;
-    if (typeof octectLength === 'undefined' || octectLength > 3) {
+    if (octectLength === undefined || octectLength > 3) {
       length = defaultOctectLength;
     }
 
@@ -161,24 +167,9 @@ class VBAuth {
     return crypto.createHash('md5').update(userAgent + ipSubStr).digest('hex');
   }
 
-  // Tries to get a login type for session authentication
-  static _getLoginTypeFromUserAgent(useragent) {
-    if (useragent) {
-      if (useragent.match(/^WindCloud/i)) {
-        return 'windcloud-app';
-      } else if (useragent.match(/^WindBot/i)) {
-        return 'windbot-client';
-      }
-    }
-
-    return null;
-  }
-
-  _mysqlCreateSession(userid, ip, idHash, sessionHash, url, userAgent, loginType) {
+  _mysqlCreateSession(userid, ip, idHash, sessionHash, url, userAgent, req) {
     return new Promise((resolve, reject) => {
-      if (!this.options.refreshActivity ||
-          loginType === 'windbot-client' ||
-          loginType === 'windcloud-app') {
+      if (!this.refreshActivity(req)) {
         resolve(sessionHash);
         return;
       }
@@ -243,7 +234,7 @@ class VBAuth {
   }
 
   // Create a new session in the database for the user
-  createSession(req, res, userid, loginType) {
+  createSession(req, res, userid /* , loginType*/) {
     const ip = VBAuth._getIpv4(req.ip);
     const idHash = this._fetchIdHash(req);
     const url = (this.options.defaultPath ? this.options.defaultPath : req.path);
@@ -263,14 +254,12 @@ class VBAuth {
     this._redisCreateSession(userid, ip, idHash, hash, url, userAgent);
 
     // Returns a promise
-    return this._mysqlCreateSession(userid, ip, idHash, hash, url, userAgent, loginType);
+    return this._mysqlCreateSession(userid, ip, idHash, hash, url, userAgent, req);
   }
 
-  _mysqlUpdateUserActivity(userid, sessionHash, lastUrl, loginType) {
+  _mysqlUpdateUserActivity(userid, sessionHash, lastUrl, req) {
     return new Promise((resolve, reject) => {
-      if (!this.options.refreshActivity ||
-          loginType === 'windbot-client' ||
-          loginType === 'windcloud-app') {
+      if (!this.refreshActivity(req)) {
         resolve(true);
         return;
       }
@@ -339,7 +328,7 @@ class VBAuth {
   }
 
   // Refreshes the user activity in the database, according to its session
-  updateUserActivity(lastUrl, userid, sessionHash, loginType) {
+  updateUserActivity(lastUrl, userid, sessionHash, req) {
     if (!sessionHash || sessionHash.length === 0) {
       return Promise.resolve(false);
     }
@@ -347,7 +336,7 @@ class VBAuth {
     return this._redisUpdateUserActivity(userid, sessionHash, lastUrl)
       .then((updated) => {
         if (!updated) {
-          return this._mysqlUpdateUserActivity(userid, sessionHash, lastUrl, loginType);
+          return this._mysqlUpdateUserActivity(userid, sessionHash, lastUrl, req);
         }
 
         return Promise.resolve(updated);
@@ -355,7 +344,7 @@ class VBAuth {
   }
 
   // Deletes a session
-  deleteSession(sessionhash, redisOnly) {
+  deleteSession(sessionhash, redisOnly, req) {
     return new Promise((resolve, reject) => {
       if (typeof sessionhash !== 'string') {
         resolve(true);
@@ -364,7 +353,7 @@ class VBAuth {
 
       parallel([
         (cb) => {
-          if (redisOnly || !this.options.refreshActivity) {
+          if (redisOnly || !this.refreshActivity(req)) {
             return cb(null, true);
           }
 
@@ -607,7 +596,7 @@ class VBAuth {
   }
 
   // Just for code reusing
-  updateOrCreateSession(req, res, sessionHash, userid, loginType) {
+  updateOrCreateSession(req, res, sessionHash, userid) {
     /* eslint no-param-reassign: ["error", { "props": false }] */
     return new Promise((resolve, reject) => {
       // Append user info to request object
@@ -619,12 +608,12 @@ class VBAuth {
         cb => this.getUserInfo(userid).then(userinfo => cb(null, userinfo)).catch(err => cb(err)),
         cb =>
           // this will return right away if sessionHash is null, or empty
-          this.updateUserActivity(url, userid, sessionHash, loginType)
+          this.updateUserActivity(url, userid, sessionHash, req)
           .then((updated) => {
             if (!updated) {
               // if for some reason his old session wasn't in the db, then just make him a new one
               // this should never happen, but just in case...
-              return this.createSession(req, res, userid, loginType);
+              return this.createSession(req, res, userid);
             }
 
             return Promise.resolve(sessionHash);
@@ -752,9 +741,6 @@ class VBAuth {
     // sessionhash is set everywhere when navigating on vbulletin
     const sessionHash = req.cookies[`${this.options.cookiePrefix}sessionhash`];
 
-    // loginType
-    const loginType = VBAuth._getLoginTypeFromUserAgent(req.header('user-agent'));
-
     // queried sessionObj
     let sessionObj = null;
 
@@ -781,7 +767,7 @@ class VBAuth {
 
       // update session, or create, if user doesn't have any
       userid = sessionObj ? parseInt(sessionObj.userid, 10) : userid;
-      return this.updateOrCreateSession(req, res, sessionHash, userid, loginType);
+      return this.updateOrCreateSession(req, res, sessionHash, userid);
     });
   }
 
@@ -834,7 +820,7 @@ class VBAuth {
       }).then(() => {
         // We just gave him a new session, lets delete his old one, if he had one...
         if (sessionHash && sessionHash.length > 0) {
-          this.deleteSession(sessionHash, false);
+          this.deleteSession(sessionHash, false, req);
         }
 
         return this.getUserInfo(userid);
@@ -863,14 +849,14 @@ class VBAuth {
 
       // Clear redisCache after vBulletin logout, requires a hook
       if (req.body && req.body.redisOnly) {
-        this.deleteSession(sessionhash, true)
+        this.deleteSession(sessionhash, true, req)
           .then(() => resolve())
           .catch(err => reject(err));
         return;
       }
 
       // Logs out from the current cookie session
-      this.deleteSession(sessionhash, false).then(() => {
+      this.deleteSession(sessionhash, false, req).then(() => {
         req.vbuser = Object.assign({}, this.defaultUserObject);
 
         const cookieOptions = { domain: this.options.cookieDomain };

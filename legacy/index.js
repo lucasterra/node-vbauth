@@ -5,9 +5,7 @@ var _createClass = function () { function defineProperties(target, props) { for 
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 
 /* eslint no-underscore-dangle: ["off"] */
-/* eslint no-console: ["error", { allow: ["warn", "error"] }] */
 /* eslint class-methods-use-this: "error"*/
-/* eslint comma-dangle: ["error", {"arrays": "always-multiline", "objects": "always-multiline", "functions": "ignore"}] */
 var crypto = require('crypto');
 var moment = require('moment');
 var _debug = require('debug');
@@ -128,6 +126,18 @@ var VBAuth = function () {
     this.isModerator = options.isModerator || _isModerator;
     this.isAdmin = options.isAdmin || _isAdmin;
 
+    if (typeof this.options.refreshActivity === 'function') {
+      this.refreshActivity = this.options.refreshActivity;
+    } else if (this.options.refreshActivity === true) {
+      this.refreshActivity = function () {
+        return true;
+      };
+    } else {
+      this.refreshActivity = function () {
+        return false;
+      };
+    }
+
     // enable query logging
     if (debug.enabled) {
       (function () {
@@ -165,16 +175,13 @@ var VBAuth = function () {
 
       return crypto.createHash('md5').update(userAgent + ipSubStr).digest('hex');
     }
-
-    // Tries to get a login type for session authentication
-
   }, {
     key: '_mysqlCreateSession',
-    value: function _mysqlCreateSession(userid, ip, idHash, sessionHash, url, userAgent, loginType) {
+    value: function _mysqlCreateSession(userid, ip, idHash, sessionHash, url, userAgent, req) {
       var _this2 = this;
 
       return new Promise(function (resolve, reject) {
-        if (!_this2.options.refreshActivity || loginType === 'windbot-client' || loginType === 'windcloud-app') {
+        if (!_this2.refreshActivity(req)) {
           resolve(sessionHash);
           return;
         }
@@ -231,7 +238,7 @@ var VBAuth = function () {
 
   }, {
     key: 'createSession',
-    value: function createSession(req, res, userid, loginType) {
+    value: function createSession(req, res, userid /* , loginType*/) {
       var ip = VBAuth._getIpv4(req.ip);
       var idHash = this._fetchIdHash(req);
       var url = this.options.defaultPath ? this.options.defaultPath : req.path;
@@ -249,15 +256,15 @@ var VBAuth = function () {
       this._redisCreateSession(userid, ip, idHash, hash, url, userAgent);
 
       // Returns a promise
-      return this._mysqlCreateSession(userid, ip, idHash, hash, url, userAgent, loginType);
+      return this._mysqlCreateSession(userid, ip, idHash, hash, url, userAgent, req);
     }
   }, {
     key: '_mysqlUpdateUserActivity',
-    value: function _mysqlUpdateUserActivity(userid, sessionHash, lastUrl, loginType) {
+    value: function _mysqlUpdateUserActivity(userid, sessionHash, lastUrl, req) {
       var _this4 = this;
 
       return new Promise(function (resolve, reject) {
-        if (!_this4.options.refreshActivity || loginType === 'windbot-client' || loginType === 'windcloud-app') {
+        if (!_this4.refreshActivity(req)) {
           resolve(true);
           return;
         }
@@ -318,7 +325,7 @@ var VBAuth = function () {
 
   }, {
     key: 'updateUserActivity',
-    value: function updateUserActivity(lastUrl, userid, sessionHash, loginType) {
+    value: function updateUserActivity(lastUrl, userid, sessionHash, req) {
       var _this6 = this;
 
       if (!sessionHash || sessionHash.length === 0) {
@@ -327,7 +334,7 @@ var VBAuth = function () {
 
       return this._redisUpdateUserActivity(userid, sessionHash, lastUrl).then(function (updated) {
         if (!updated) {
-          return _this6._mysqlUpdateUserActivity(userid, sessionHash, lastUrl, loginType);
+          return _this6._mysqlUpdateUserActivity(userid, sessionHash, lastUrl, req);
         }
 
         return Promise.resolve(updated);
@@ -338,7 +345,7 @@ var VBAuth = function () {
 
   }, {
     key: 'deleteSession',
-    value: function deleteSession(sessionhash, redisOnly) {
+    value: function deleteSession(sessionhash, redisOnly, req) {
       var _this7 = this;
 
       return new Promise(function (resolve, reject) {
@@ -348,7 +355,7 @@ var VBAuth = function () {
         }
 
         parallel([function (cb) {
-          if (redisOnly || !_this7.options.refreshActivity) {
+          if (redisOnly || !_this7.refreshActivity(req)) {
             return cb(null, true);
           }
 
@@ -615,7 +622,7 @@ var VBAuth = function () {
 
   }, {
     key: 'updateOrCreateSession',
-    value: function updateOrCreateSession(req, res, sessionHash, userid, loginType) {
+    value: function updateOrCreateSession(req, res, sessionHash, userid) {
       var _this17 = this;
 
       /* eslint no-param-reassign: ["error", { "props": false }] */
@@ -634,11 +641,11 @@ var VBAuth = function () {
         }, function (cb) {
           return (
             // this will return right away if sessionHash is null, or empty
-            _this17.updateUserActivity(url, userid, sessionHash, loginType).then(function (updated) {
+            _this17.updateUserActivity(url, userid, sessionHash, req).then(function (updated) {
               if (!updated) {
                 // if for some reason his old session wasn't in the db, then just make him a new one
                 // this should never happen, but just in case...
-                return _this17.createSession(req, res, userid, loginType);
+                return _this17.createSession(req, res, userid);
               }
 
               return Promise.resolve(sessionHash);
@@ -778,9 +785,6 @@ var VBAuth = function () {
       // sessionhash is set everywhere when navigating on vbulletin
       var sessionHash = req.cookies[this.options.cookiePrefix + 'sessionhash'];
 
-      // loginType
-      var loginType = VBAuth._getLoginTypeFromUserAgent(req.header('user-agent'));
-
       // queried sessionObj
       var sessionObj = null;
 
@@ -806,7 +810,7 @@ var VBAuth = function () {
 
         // update session, or create, if user doesn't have any
         userid = sessionObj ? parseInt(sessionObj.userid, 10) : userid;
-        return _this21.updateOrCreateSession(req, res, sessionHash, userid, loginType);
+        return _this21.updateOrCreateSession(req, res, sessionHash, userid);
       });
     }
 
@@ -864,7 +868,7 @@ var VBAuth = function () {
         }).then(function () {
           // We just gave him a new session, lets delete his old one, if he had one...
           if (sessionHash && sessionHash.length > 0) {
-            _this22.deleteSession(sessionHash, false);
+            _this22.deleteSession(sessionHash, false, req);
           }
 
           return _this22.getUserInfo(userid);
@@ -896,7 +900,7 @@ var VBAuth = function () {
 
         // Clear redisCache after vBulletin logout, requires a hook
         if (req.body && req.body.redisOnly) {
-          _this23.deleteSession(sessionhash, true).then(function () {
+          _this23.deleteSession(sessionhash, true, req).then(function () {
             return resolve();
           }).catch(function (err) {
             return reject(err);
@@ -905,7 +909,7 @@ var VBAuth = function () {
         }
 
         // Logs out from the current cookie session
-        _this23.deleteSession(sessionhash, false).then(function () {
+        _this23.deleteSession(sessionhash, false, req).then(function () {
           req.vbuser = Object.assign({}, _this23.defaultUserObject);
 
           var cookieOptions = { domain: _this23.options.cookieDomain };
@@ -1074,9 +1078,9 @@ var VBAuth = function () {
   }], [{
     key: '_getIpv4',
     value: function _getIpv4(ip) {
-      /* eslint no-param-reassign: ["off"] */
-      ip = ip || '';
-      return ip.slice(ip.lastIndexOf(':') + 1);
+      /* eslint no-param-reassign: "off"*/
+      var tmpIp = ip || '';
+      return tmpIp.slice(tmpIp.lastIndexOf(':') + 1);
     }
 
     // Cuts off the the last sessions of an ip address
@@ -1085,25 +1089,12 @@ var VBAuth = function () {
     key: '_getSubstrIp',
     value: function _getSubstrIp(ip, octectLength, defaultOctectLength) {
       var length = octectLength;
-      if (typeof octectLength === 'undefined' || octectLength > 3) {
+      if (octectLength === undefined || octectLength > 3) {
         length = defaultOctectLength;
       }
 
       var arr = ip.split('.').slice(0, 4 - length);
       return arr.join('.');
-    }
-  }, {
-    key: '_getLoginTypeFromUserAgent',
-    value: function _getLoginTypeFromUserAgent(useragent) {
-      if (useragent) {
-        if (useragent.match(/^WindCloud/i)) {
-          return 'windcloud-app';
-        } else if (useragent.match(/^WindBot/i)) {
-          return 'windbot-client';
-        }
-      }
-
-      return null;
     }
   }]);
 

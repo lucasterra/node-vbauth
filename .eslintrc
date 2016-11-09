@@ -10,7 +10,9 @@
   "rules": {
     "quotes": [2, "single"],
     "strict": [2, "never"],
-    "linebreak-style": [0, "windows"]
+    "linebreak-style": [0, "windows"],
+    "comma-dangle": ["error", {"arrays": "always-multiline", "objects": "always-multiline", "functions": "ignore"}],
+    "no-console": ["error", { "allow": ["warn", "error"] }]
   },
   "extends": "airbnb-base"
 }
