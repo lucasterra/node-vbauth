@@ -3,6 +3,8 @@ const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const VBAuth = require('../index');
 const exphbs = require('express-handlebars');
+const morgan = require('morgan');
+const redis = require('redis').createClient();
 
 const app = express();
 app.engine('.hbs', exphbs({ defaultLayout: 'main', layoutsDir: './demo/views/layouts/', extname: '.hbs' }));
@@ -15,10 +17,16 @@ const vb = new VBAuth({
   user: 'root',
   password: 'test',
   database: 'forum_db',
-}, { subscriptions: true, redisCache: false, cookieSalt: '12345678' });
+}, { subscriptions: true, redisCache: redis, cookieSalt: '12345678' });
 
 // Cookie parser is required for vbauth to work
 app.use(cookieParser());
+
+// Serve favico, to prevent express from doing vb.session all the time
+app.use('/favicon.ico', (req, res) => res.set('Content-Type', 'image/x-icon').send());
+
+// Log accesses
+app.use(morgan('tiny'));
 
 // Middleware to inject vbuser in express' req
 app.use(vb.session());

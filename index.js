@@ -87,6 +87,17 @@ class VBAuth {
 
       // Subscription id to query
       subscriptionId: 1,
+
+      // The subnet mask which reflects the level of checking you wish to run
+      // against IP addresses when a session is being fetched.
+      // To check this, go to:
+      //  vBulletin Options ->
+      //    Server Settings and Optimization Options ->
+      //      Session IP Octet Length Check
+      // 255.255.255.255 = 0
+      // 255.255.255.0   = 1
+      // 255.255.0.0     = 2
+      sessionIpOctetLength: 1,
     }, options);
 
     this.defaultUserObject = {
@@ -123,20 +134,31 @@ class VBAuth {
     }
   }
 
-  // Removes ipv6 from req.ip
-  static _getIp(req) {
-    const ip = req.ip || '';
+  // Removes ipv6 from ip
+  static _getIpv4(ip) {
+    /* eslint no-param-reassign: ["off"] */
+    ip = ip || '';
     return ip.slice(ip.lastIndexOf(':') + 1);
   }
 
-  // Unique id based on user ip and user agent
-  static _fetchIdHash(req) {
-    let ip = req.ip;
-    ip = ip.slice(ip.lastIndexOf(':') + 1, ip.lastIndexOf('.'));
+  // Cuts off the the last sessions of an ip address
+  static _getSubstrIp(ip, octectLength, defaultOctectLength) {
+    let length = octectLength;
+    if (typeof octectLength === 'undefined' || octectLength > 3) {
+      length = defaultOctectLength;
+    }
 
-    return crypto.createHash('md5')
-      .update(req.header('user-agent') + ip)
-      .digest('hex');
+    const arr = ip.split('.').slice(0, 4 - length);
+    return arr.join('.');
+  }
+
+  // Unique id based on user ip and user agent
+  _fetchIdHash(req) {
+    const ip = VBAuth._getIpv4(req.ip);
+    const ipSubStr = VBAuth._getSubstrIp(ip, this.options.sessionIpOctetLength);
+    const userAgent = req.header('user-agent');
+
+    return crypto.createHash('md5').update(userAgent + ipSubStr).digest('hex');
   }
 
   // Tries to get a login type for session authentication
@@ -208,7 +230,7 @@ class VBAuth {
         useragent: userAgent,
         loggedin: (userid > 0),
       });
-      multi.expire(key, this.options.cookieTimeout);
+      multi.expire(key, this.options.cookieTimeout * 0.25);
       multi.exec((err) => {
         if (err) {
           reject(err);
@@ -222,8 +244,8 @@ class VBAuth {
 
   // Create a new session in the database for the user
   createSession(req, res, userid, loginType) {
-    const ip = VBAuth._getIp(req);
-    const idHash = VBAuth._fetchIdHash(req);
+    const ip = VBAuth._getIpv4(req.ip);
+    const idHash = this._fetchIdHash(req);
     const url = (this.options.defaultPath ? this.options.defaultPath : req.path);
     const userAgent = req.header('user-agent').slice(0, 100);
     let hash = moment().valueOf().toString() + userid + ip;
@@ -299,15 +321,12 @@ class VBAuth {
           return;
         }
 
-        const multi = this.options.redisCache.multi();
-        multi.hmset(key, {
+        this.options.redisCache.hmset(key, {
           lastactivity: moment().unix(),
           location: lastUrl,
           userid,
           loggedin: (userid > 0),
-        });
-        multi.expire(key, this.options.cookieTimeout);
-        multi.exec((err2) => {
+        }, (err2) => {
           if (err2) {
             reject(err2);
             return;
@@ -419,7 +438,7 @@ class VBAuth {
 
       const multi = this.options.redisCache.multi();
       multi.hmset(key, userinfo);
-      multi.expire(key, this.options.cookieTimeout);
+      multi.expire(key, this.options.cookieTimeout * 0.25);
       multi.exec((err) => {
         if (err) {
           reject(err);
@@ -469,17 +488,17 @@ class VBAuth {
       let subscriptionFields = '';
       let subscriptionJoin = '';
       if (this.options.subscriptions) {
-        subscriptionFields = `, IFNULL(b.status, 0) AS subscriptionstatus,
-                                IFNULL(b.expirydate, 0) AS subscriptionexpirydate`;
-        subscriptionJoin = `LEFT JOIN subscriptionlog AS b
-                            ON a.userid = b.userid AND b.subscriptionid = ${mysql.escape(this.options.subscriptionId)}`;
+        subscriptionFields = ', IFNULL(b.status, 0) AS subscriptionstatus,' +
+                              ' IFNULL(b.expirydate, 0) AS subscriptionexpirydate';
+        subscriptionJoin = 'LEFT JOIN subscriptionlog AS b' +
+                            ` ON a.userid = b.userid AND b.subscriptionid = ${mysql.escape(this.options.subscriptionId)}`;
       }
 
-      const query = `SELECT a.userid, a.username,
-                            a.usergroupid, a.membergroupids,
-                            a.email, a.posts${subscriptionFields}
-                            FROM user AS a ${subscriptionJoin}
-                            WHERE a.userid = ${mysql.escape(userid)}`;
+      const query = 'SELECT a.userid, a.username, ' +
+                          ' a.usergroupid, a.membergroupids,' +
+                          ` a.email, a.posts${subscriptionFields}` +
+                          ` FROM user AS a ${subscriptionJoin}` +
+                          ` WHERE a.userid = ${mysql.escape(userid)}`;
 
       this.database.query(query, (err, rows) => {
         if (err) {
@@ -489,7 +508,7 @@ class VBAuth {
 
         const userinfo = rows[0];
         if (!userinfo) {
-          console.warn('User does not exist');
+          console.warn('User does not exist:', userid);
           resolve(null);
           return;
         }
@@ -507,7 +526,7 @@ class VBAuth {
       return Promise.resolve(Object.assign({}, this.defaultUserObject));
     }
 
-    return this._redisGetUserInfo()
+    return this._redisGetUserInfo(userid)
       .then((userinfo) => {
         if (!userinfo) {
           return this._mysqlGetUserInfo(userid);
@@ -519,7 +538,7 @@ class VBAuth {
 
   _mysqlGetActiveSession(sessionHash, idHash) {
     return new Promise((resolve, reject) => {
-      const query = mysql.format('SELECT * FROM session' +
+      const query = mysql.format('SELECT a.* FROM session AS a' +
         ' WHERE sessionhash = ? AND idhash = ? AND lastactivity > ?',
         [sessionHash, idHash, moment().unix() - this.options.cookieTimeout]
       );
@@ -530,7 +549,15 @@ class VBAuth {
           return;
         }
 
-        resolve(rows[0]);
+        const sessionData = rows[0];
+        if (!sessionData) {
+          console.warn('Session expired:', sessionHash);
+          resolve(null);
+          return;
+        }
+
+        this._redisCreateSession(sessionData);
+        resolve(sessionData);
       });
     });
   }
@@ -731,7 +758,7 @@ class VBAuth {
     // queried sessionObj
     let sessionObj = null;
 
-    return this.getActiveSession(sessionHash, VBAuth._fetchIdHash(req))
+    return this.getActiveSession(sessionHash, this._fetchIdHash(req))
     .then((session) => {
       // Check if we have remember-me set
       if (userid && password && (!session || session.userid !== userid)) {
@@ -753,14 +780,14 @@ class VBAuth {
       }
 
       // update session, or create, if user doesn't have any
-      userid = sessionObj ? sessionObj.userid : userid;
+      userid = sessionObj ? parseInt(sessionObj.userid, 10) : userid;
       return this.updateOrCreateSession(req, res, sessionHash, userid, loginType);
     });
   }
 
   // Logs the user in
   _login(username, pass, rememberme, loginType, req, res) {
-    const ip = VBAuth._getIp(req);
+    const ip = VBAuth._getIpv4(req.ip);
     const sessionHash = req.cookies[`${this.options.cookiePrefix}sessionhash`];
     let userid = 0;
 
@@ -831,16 +858,18 @@ class VBAuth {
   // Logs you out
   logoutSession(req, res) {
     return new Promise((resolve, reject) => {
+      // Will log you out from the currently set cookie
+      const sessionhash = req.cookies[`${this.options.cookiePrefix}sessionhash`];
+
       // Clear redisCache after vBulletin logout, requires a hook
-      if (req.query.hash) {
-        this.deleteSession(req.query.hash, true)
-          .then(() => resolve('success'))
+      if (req.body && req.body.redisOnly) {
+        this.deleteSession(sessionhash, true)
+          .then(() => resolve())
           .catch(err => reject(err));
         return;
       }
 
       // Logs out from the current cookie session
-      const sessionhash = req.cookies[`${this.options.cookiePrefix}sessionhash`];
       this.deleteSession(sessionhash, false).then(() => {
         req.vbuser = Object.assign({}, this.defaultUserObject);
 
@@ -916,7 +945,20 @@ class VBAuth {
   logout() {
     return (req, res, next) => {
       this.logoutSession(req, res)
-      .then(() => this.session()(req, res, next))
+      .then((result) => {
+        if (result === 'success') {
+          // logged out, give the user a new empty session
+
+          // this will prevent session() from trying to query existing session
+          delete req.cookies[`${this.options.cookiePrefix}sessionhash`];
+
+          // make new session
+          this.session()(req, res, next);
+        } else {
+          // only deleted from redis-cache, no need to give user a new session
+          next();
+        }
+      })
       .catch((err) => {
         if (__DEV__) {
           next(err);
