@@ -913,20 +913,20 @@ class VBAuth {
     };
   }
 
-  logout(req, res) {
-    return new Promise((resolve, reject) => {
+  logout() {
+    return (req, res, next) => {
       this.logoutSession(req, res)
-      .then(() => resolve())
+      .then(() => this.session()(req, res, next))
       .catch((err) => {
         if (__DEV__) {
-          reject(err);
+          next(err);
           return;
         }
 
         console.warn(err);
-        reject(new Error('Database error'));
+        next(new Error('Database error'));
       });
-    });
+    };
   }
 
   login(username, pass, rememberme, loginType, req, res) {

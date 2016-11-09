@@ -106,16 +106,16 @@ An Express/Connect middleware that will only allow admins to access a route. Thi
 
 An Express/Connect middleware that will only allow moderators to access a route. This uses `options.isModerator` function to determine whether the user is a moderator or not.
 
-### login(login, password, remember) -> Promise
+### login(login, password, remember, loginType, req, res) -> Promise
 
-Tries to perform a login using `login` and `password`. You can also pass `remember` as `true`/`false` if you want a persistent session.
+Tries to perform a login using `login` and `password`. You can also pass `remember` as `true`/`false` if you want a persistent session. `loginType` can be used for admin/mods login, but it's not implemented yet. `req` and `res` come from the Express Route.
 The promise can return 4 values:
 * `'success'`: authentication went ok.
 * `failed, login and password are required`: user name and password was not specified.
 * `failed, too many tries`: user typed the wrong password for 5 times in less than 15 minutes.
 * `failed, wrong login or password`: incorrect user name or password.
 
-### logout() -> Promise
+### logout() -> Express-like Middleware
 
 Will erase the session from the database and erase user cookies.
 

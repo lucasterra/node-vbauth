@@ -68,10 +68,8 @@ app.post('/login', bodyParser.urlencoded({ extended: true }), (req, res) => {
 });
 
 // Performs logout
-app.post('/logout', (req, res) => {
-  vb.logout(req, res)
-    .then(() => res.redirect('/'))
-    .catch((err) => res.send(err));
+app.post('/logout', vb.logout(), (req, res) => {
+  res.redirect('/');
 });
 
 // error handler
