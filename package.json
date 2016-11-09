@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint index.js",
     "build": "babel index.js --out-file legacy/index.js --presets es2015",
-    "demo": "nodemon demo/index.js"
+    "demo": "nodemon demo/index.js",
+    "prepublish": "npm run build"
   },
   "repository": {
     "type": "git",

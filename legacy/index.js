@@ -60,7 +60,7 @@ var VBAuth = function () {
       this.database = database;
     }
 
-    this.options = Object.assign(options, {
+    this.options = Object.assign({
       // Used to salt the remember me password before setting the cookie.
       // The cookieSalt is located at the file 'includes/functions.php' of your vBulletin install
       cookieSalt: '',
@@ -96,8 +96,19 @@ var VBAuth = function () {
       subscriptions: true,
 
       // Subscription id to query
-      subscriptionId: 1
-    });
+      subscriptionId: 1,
+
+      // The subnet mask which reflects the level of checking you wish to run
+      // against IP addresses when a session is being fetched.
+      // To check this, go to:
+      //  vBulletin Options ->
+      //    Server Settings and Optimization Options ->
+      //      Session IP Octet Length Check
+      // 255.255.255.255 = 0
+      // 255.255.255.0   = 1
+      // 255.255.0.0     = 2
+      sessionIpOctetLength: 1
+    }, options);
 
     this.defaultUserObject = {
       userid: 0,
@@ -139,10 +150,25 @@ var VBAuth = function () {
     }
   }
 
-  // Removes ipv6 from req.ip
+  // Removes ipv6 from ip
 
 
   _createClass(VBAuth, [{
+    key: '_fetchIdHash',
+
+
+    // Unique id based on user ip and user agent
+    value: function _fetchIdHash(req) {
+      var ip = VBAuth._getIpv4(req.ip);
+      var ipSubStr = VBAuth._getSubstrIp(ip, this.options.sessionIpOctetLength);
+      var userAgent = req.header('user-agent');
+
+      return crypto.createHash('md5').update(userAgent + ipSubStr).digest('hex');
+    }
+
+    // Tries to get a login type for session authentication
+
+  }, {
     key: '_mysqlCreateSession',
     value: function _mysqlCreateSession(userid, ip, idHash, sessionHash, url, userAgent, loginType) {
       var _this2 = this;
@@ -189,7 +215,7 @@ var VBAuth = function () {
           useragent: userAgent,
           loggedin: userid > 0
         });
-        multi.expire(key, _this3.options.cookieTimeout);
+        multi.expire(key, _this3.options.cookieTimeout * 0.25);
         multi.exec(function (err) {
           if (err) {
             reject(err);
@@ -206,8 +232,8 @@ var VBAuth = function () {
   }, {
     key: 'createSession',
     value: function createSession(req, res, userid, loginType) {
-      var ip = VBAuth._getIp(req);
-      var idHash = VBAuth._fetchIdHash(req);
+      var ip = VBAuth._getIpv4(req.ip);
+      var idHash = this._fetchIdHash(req);
       var url = this.options.defaultPath ? this.options.defaultPath : req.path;
       var userAgent = req.header('user-agent').slice(0, 100);
       var hash = moment().valueOf().toString() + userid + ip;
@@ -271,15 +297,12 @@ var VBAuth = function () {
             return;
           }
 
-          var multi = _this5.options.redisCache.multi();
-          multi.hmset(key, {
+          _this5.options.redisCache.hmset(key, {
             lastactivity: moment().unix(),
             location: lastUrl,
             userid: userid,
             loggedin: userid > 0
-          });
-          multi.expire(key, _this5.options.cookieTimeout);
-          multi.exec(function (err2) {
+          }, function (err2) {
             if (err2) {
               reject(err2);
               return;
@@ -407,7 +430,7 @@ var VBAuth = function () {
 
         var multi = _this10.options.redisCache.multi();
         multi.hmset(key, userinfo);
-        multi.expire(key, _this10.options.cookieTimeout);
+        multi.expire(key, _this10.options.cookieTimeout * 0.25);
         multi.exec(function (err) {
           if (err) {
             reject(err);
@@ -463,11 +486,11 @@ var VBAuth = function () {
         var subscriptionFields = '';
         var subscriptionJoin = '';
         if (_this12.options.subscriptions) {
-          subscriptionFields = ', IFNULL(b.status, 0) AS subscriptionstatus,\n                                IFNULL(b.expirydate, 0) AS subscriptionexpirydate';
-          subscriptionJoin = 'LEFT JOIN subscriptionlog AS b\n                            ON a.userid = b.userid AND b.subscriptionid = 1';
+          subscriptionFields = ', IFNULL(b.status, 0) AS subscriptionstatus,' + ' IFNULL(b.expirydate, 0) AS subscriptionexpirydate';
+          subscriptionJoin = 'LEFT JOIN subscriptionlog AS b' + (' ON a.userid = b.userid AND b.subscriptionid = ' + mysql.escape(_this12.options.subscriptionId));
         }
 
-        var query = 'SELECT a.userid, a.username,\n                            a.usergroupid, a.membergroupids,\n                            a.email, a.posts' + subscriptionFields + '\n                            FROM user AS a ' + subscriptionJoin + '\n                            WHERE a.userid = ' + mysql.escape(userid);
+        var query = 'SELECT a.userid, a.username, ' + ' a.usergroupid, a.membergroupids,' + (' a.email, a.posts' + subscriptionFields) + (' FROM user AS a ' + subscriptionJoin) + (' WHERE a.userid = ' + mysql.escape(userid));
 
         _this12.database.query(query, function (err, rows) {
           if (err) {
@@ -477,7 +500,7 @@ var VBAuth = function () {
 
           var userinfo = rows[0];
           if (!userinfo) {
-            console.warn('User does not exist');
+            console.warn('User does not exist:', userid);
             resolve(null);
             return;
           }
@@ -500,7 +523,7 @@ var VBAuth = function () {
         return Promise.resolve(Object.assign({}, this.defaultUserObject));
       }
 
-      return this._redisGetUserInfo().then(function (userinfo) {
+      return this._redisGetUserInfo(userid).then(function (userinfo) {
         if (!userinfo) {
           return _this13._mysqlGetUserInfo(userid);
         }
@@ -514,7 +537,7 @@ var VBAuth = function () {
       var _this14 = this;
 
       return new Promise(function (resolve, reject) {
-        var query = mysql.format('SELECT * FROM session' + ' WHERE sessionhash = ? AND idhash = ? AND lastactivity > ?', [sessionHash, idHash, moment().unix() - _this14.options.cookieTimeout]);
+        var query = mysql.format('SELECT a.* FROM session AS a' + ' WHERE sessionhash = ? AND idhash = ? AND lastactivity > ?', [sessionHash, idHash, moment().unix() - _this14.options.cookieTimeout]);
 
         _this14.database.query(query, function (err, rows) {
           if (err) {
@@ -522,7 +545,15 @@ var VBAuth = function () {
             return;
           }
 
-          resolve(rows[0]);
+          var sessionData = rows[0];
+          if (!sessionData) {
+            console.warn('Session expired:', sessionHash);
+            resolve(null);
+            return;
+          }
+
+          _this14._redisCreateSession(sessionData);
+          resolve(sessionData);
         });
       });
     }
@@ -753,7 +784,7 @@ var VBAuth = function () {
       // queried sessionObj
       var sessionObj = null;
 
-      return this.getActiveSession(sessionHash, VBAuth._fetchIdHash(req)).then(function (session) {
+      return this.getActiveSession(sessionHash, this._fetchIdHash(req)).then(function (session) {
         // Check if we have remember-me set
         if (userid && password && (!session || session.userid !== userid)) {
           return _this21.checkRememberMeCredentials(userid, password);
@@ -774,7 +805,7 @@ var VBAuth = function () {
         }
 
         // update session, or create, if user doesn't have any
-        userid = sessionObj ? sessionObj.userid : userid;
+        userid = sessionObj ? parseInt(sessionObj.userid, 10) : userid;
         return _this21.updateOrCreateSession(req, res, sessionHash, userid, loginType);
       });
     }
@@ -786,7 +817,7 @@ var VBAuth = function () {
     value: function _login(username, pass, rememberme, loginType, req, res) {
       var _this22 = this;
 
-      var ip = VBAuth._getIp(req);
+      var ip = VBAuth._getIpv4(req.ip);
       var sessionHash = req.cookies[this.options.cookiePrefix + 'sessionhash'];
       var userid = 0;
 
@@ -860,10 +891,13 @@ var VBAuth = function () {
       var _this23 = this;
 
       return new Promise(function (resolve, reject) {
+        // Will log you out from the currently set cookie
+        var sessionhash = req.cookies[_this23.options.cookiePrefix + 'sessionhash'];
+
         // Clear redisCache after vBulletin logout, requires a hook
-        if (req.query.hash) {
-          _this23.deleteSession(req.query.hash, true).then(function () {
-            return resolve('success');
+        if (req.body && req.body.redisOnly) {
+          _this23.deleteSession(sessionhash, true).then(function () {
+            return resolve();
           }).catch(function (err) {
             return reject(err);
           });
@@ -871,7 +905,6 @@ var VBAuth = function () {
         }
 
         // Logs out from the current cookie session
-        var sessionhash = req.cookies[_this23.options.cookiePrefix + 'sessionhash'];
         _this23.deleteSession(sessionhash, false).then(function () {
           req.vbuser = Object.assign({}, _this23.defaultUserObject);
 
@@ -955,22 +988,33 @@ var VBAuth = function () {
     }
   }, {
     key: 'logout',
-    value: function logout(req, res) {
+    value: function logout() {
       var _this25 = this;
 
-      return new Promise(function (resolve, reject) {
-        _this25.logoutSession(req, res).then(function () {
-          return resolve();
+      return function (req, res, next) {
+        _this25.logoutSession(req, res).then(function (result) {
+          if (result === 'success') {
+            // logged out, give the user a new empty session
+
+            // this will prevent session() from trying to query existing session
+            delete req.cookies[_this25.options.cookiePrefix + 'sessionhash'];
+
+            // make new session
+            _this25.session()(req, res, next);
+          } else {
+            // only deleted from redis-cache, no need to give user a new session
+            next();
+          }
         }).catch(function (err) {
           if (__DEV__) {
-            reject(err);
+            next(err);
             return;
           }
 
           console.warn(err);
-          reject(new Error('Database error'));
+          next(new Error('Database error'));
         });
-      });
+      };
     }
   }, {
     key: 'login',
@@ -1028,25 +1072,26 @@ var VBAuth = function () {
       };
     }
   }], [{
-    key: '_getIp',
-    value: function _getIp(req) {
-      var ip = req.ip || '';
+    key: '_getIpv4',
+    value: function _getIpv4(ip) {
+      /* eslint no-param-reassign: ["off"] */
+      ip = ip || '';
       return ip.slice(ip.lastIndexOf(':') + 1);
     }
 
-    // Unique id based on user ip and user agent
+    // Cuts off the the last sessions of an ip address
 
   }, {
-    key: '_fetchIdHash',
-    value: function _fetchIdHash(req) {
-      var ip = req.ip;
-      ip = ip.slice(ip.lastIndexOf(':') + 1, ip.lastIndexOf('.'));
+    key: '_getSubstrIp',
+    value: function _getSubstrIp(ip, octectLength, defaultOctectLength) {
+      var length = octectLength;
+      if (typeof octectLength === 'undefined' || octectLength > 3) {
+        length = defaultOctectLength;
+      }
 
-      return crypto.createHash('md5').update(req.header('user-agent') + ip).digest('hex');
+      var arr = ip.split('.').slice(0, 4 - length);
+      return arr.join('.');
     }
-
-    // Tries to get a login type for session authentication
-
   }, {
     key: '_getLoginTypeFromUserAgent',
     value: function _getLoginTypeFromUserAgent(useragent) {

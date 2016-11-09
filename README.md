@@ -12,12 +12,16 @@ npm install --save vbauth
 ```js
 const VBAuth = require('vbauth');
 const vbauth = new VBAuth(database, options);
+
+// express/connect middleware
+// this will inject info about the currently authenticated user in req.vbuser
+app.use(vbauth.session());
 ```
 
-### Node 4
+#### Node 4
+This module makes use of ES6 features. For Node 4, you should either use Babel, or require the module compiled for ES5:
 ```js
 const VBAuth = require('vbauth/legacy');
-const vbauth = new VBAuth(database, options);
 ```
 
 More examples can be seem in the API section.
