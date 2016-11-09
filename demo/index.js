@@ -15,12 +15,12 @@ const vb = new VBAuth({
   user: 'root',
   password: 'test',
   database: 'forum_db',
-}, { subscriptions: true, redisCache: false, cookieSalt: null });
+}, { subscriptions: true, redisCache: false, cookieSalt: '12345678' });
 
 // Cookie parser is required for vbauth to work
 app.use(cookieParser());
 
-// Middleware to inject vbuser in exoress' req
+// Middleware to inject vbuser in express' req
 app.use(vb.session());
 
 // Login page
@@ -85,6 +85,6 @@ app.use((err, req, res, next) => {
   res.render('error');
 });
 
-app.listen(3000, () => {
-  console.log('vBAuth Example listening on port 3000!');
+app.listen(5000, () => {
+  console.log('vBAuth Example listening on port 5000!');
 });

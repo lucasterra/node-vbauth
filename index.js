@@ -50,7 +50,7 @@ class VBAuth {
       this.database = database;
     }
 
-    this.options = Object.assign(options, {
+    this.options = Object.assign({
       // Used to salt the remember me password before setting the cookie.
       // The cookieSalt is located at the file 'includes/functions.php' of your vBulletin install
       cookieSalt: '',
@@ -87,7 +87,7 @@ class VBAuth {
 
       // Subscription id to query
       subscriptionId: 1,
-    });
+    }, options);
 
     this.defaultUserObject = {
       userid: 0,
@@ -472,7 +472,7 @@ class VBAuth {
         subscriptionFields = `, IFNULL(b.status, 0) AS subscriptionstatus,
                                 IFNULL(b.expirydate, 0) AS subscriptionexpirydate`;
         subscriptionJoin = `LEFT JOIN subscriptionlog AS b
-                            ON a.userid = b.userid AND b.subscriptionid = 1`;
+                            ON a.userid = b.userid AND b.subscriptionid = ${mysql.escape(this.options.subscriptionId)}`;
       }
 
       const query = `SELECT a.userid, a.username,
