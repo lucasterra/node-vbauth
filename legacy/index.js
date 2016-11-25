@@ -105,7 +105,10 @@ var VBAuth = function () {
       // 255.255.255.255 = 0
       // 255.255.255.0   = 1
       // 255.255.0.0     = 2
-      sessionIpOctetLength: 1
+      sessionIpOctetLength: 1,
+
+      // CSRF-Token Key
+      csrfTokenKey: '1234567891123456789112345678911234567891'
     }, options);
 
     this.defaultUserObject = {
@@ -138,6 +141,10 @@ var VBAuth = function () {
       };
     }
 
+    if (this.options.csrfTokenKey && this.options.csrfTokenKey.length > 0) {
+      this.hmac = true;
+    }
+
     // enable query logging
     if (debug.enabled) {
       (function () {
@@ -164,10 +171,15 @@ var VBAuth = function () {
 
 
   _createClass(VBAuth, [{
-    key: '_fetchIdHash',
-
+    key: '_getCsrfToken',
+    value: function _getCsrfToken(sessionHash) {
+      return crypto.createHmac('sha256', this.options.csrfTokenKey).update(sessionHash).digest('hex');
+    }
 
     // Unique id based on user ip and user agent
+
+  }, {
+    key: '_fetchIdHash',
     value: function _fetchIdHash(req) {
       var ip = VBAuth._getIpv4(req.ip);
       var ipSubStr = VBAuth._getSubstrIp(ip, this.options.sessionIpOctetLength);
@@ -211,6 +223,7 @@ var VBAuth = function () {
 
         var key = 'vbsession:' + sessionHash;
 
+        debug('Storing vbsession in redis-cache');
         var multi = _this3.options.redisCache.multi();
         multi.hmset(key, {
           userid: userid,
@@ -222,7 +235,7 @@ var VBAuth = function () {
           useragent: userAgent,
           loggedin: userid > 0
         });
-        multi.expire(key, _this3.options.cookieTimeout * 0.25);
+        multi.expire(key, Math.floor(_this3.options.cookieTimeout * 0.25));
         multi.exec(function (err) {
           if (err) {
             reject(err);
@@ -251,6 +264,12 @@ var VBAuth = function () {
         domain: this.options.cookieDomain,
         httpOnly: true
       });
+
+      // Lets also set the csrf token here
+      if (this.hmac) {
+        req.csrfToken = this._getCsrfToken(hash);
+        req.sessionHash = hash;
+      }
 
       // Use Redis cache, if available
       this._redisCreateSession(userid, ip, idHash, hash, url, userAgent);
@@ -294,6 +313,7 @@ var VBAuth = function () {
           return;
         }
 
+        debug('Checking vbsession existance in redis-cache');
         _this5.options.redisCache.exists(key, function (err, exists) {
           if (err) {
             reject(err);
@@ -304,12 +324,16 @@ var VBAuth = function () {
             return;
           }
 
-          _this5.options.redisCache.hmset(key, {
+          debug('Updating vbsession in redis-cache');
+          var multi = _this5.options.redisCache.multi();
+          multi.hmset(key, {
             lastactivity: moment().unix(),
             location: lastUrl,
             userid: userid,
             loggedin: userid > 0
-          }, function (err2) {
+          });
+          multi.expire(key, Math.floor(_this5.options.cookieTimeout * 0.25));
+          multi.exec(function (err2) {
             if (err2) {
               reject(err2);
               return;
@@ -368,6 +392,7 @@ var VBAuth = function () {
             return cb(null, true);
           }
 
+          debug('Deleting vbsession in redis-cache');
           return _this7.options.redisCache.del('vbsession:' + sessionhash, function (err) {
             return cb(err, true);
           });
@@ -435,9 +460,10 @@ var VBAuth = function () {
 
         var key = 'vbuser:' + userinfo.userid;
 
+        debug('Storing vbuser in redis-cache');
         var multi = _this10.options.redisCache.multi();
         multi.hmset(key, userinfo);
-        multi.expire(key, _this10.options.cookieTimeout * 0.25);
+        multi.expire(key, Math.floor(_this10.options.cookieTimeout * 0.25));
         multi.exec(function (err) {
           if (err) {
             reject(err);
@@ -459,6 +485,7 @@ var VBAuth = function () {
         }
 
         var key = 'vbuser:' + userid;
+        debug('Fetching vbuser from redis-cache');
         _this11.options.redisCache.hgetall(key, function (err, results) {
           if (err) {
             return reject(err);
@@ -559,7 +586,7 @@ var VBAuth = function () {
             return;
           }
 
-          _this14._redisCreateSession(sessionData);
+          _this14._redisCreateSession(sessionData.userid, sessionData.host, idHash, sessionHash, sessionData.location, sessionData.useragent);
           resolve(sessionData);
         });
       });
@@ -575,6 +602,7 @@ var VBAuth = function () {
           return;
         }
 
+        debug('Fetching vbsession from redis-cache');
         var key = 'vbsession:' + sessionHash;
         _this15.options.redisCache.hgetall(key, function (err, results) {
           if (err) {
@@ -583,6 +611,7 @@ var VBAuth = function () {
           }
 
           if (!results || results.idhash !== idHash) {
+            debug('vbsession expired from redis-cache!');
             resolve(null);
           } else {
             resolve(results);
@@ -665,6 +694,10 @@ var VBAuth = function () {
           }
 
           req.vbuser = results[0];
+          if (_this17.hmac && !req.csrfToken) {
+            req.csrfToken = _this17._getCsrfToken(sessionHash);
+            req.sessionHash = sessionHash;
+          }
           resolve(results[1]);
         });
       });
@@ -874,6 +907,10 @@ var VBAuth = function () {
           return _this22.getUserInfo(userid);
         }).then(function (userinfo) {
           req.vbuser = userinfo;
+          if (_this22.hmac && !req.csrfToken) {
+            req.csrfToken = _this22._getCsrfToken(sessionHash);
+            req.sessionHash = sessionHash;
+          }
 
           resolve('success');
         }).catch(function (err) {
@@ -911,6 +948,10 @@ var VBAuth = function () {
         // Logs out from the current cookie session
         _this23.deleteSession(sessionhash, false, req).then(function () {
           req.vbuser = Object.assign({}, _this23.defaultUserObject);
+          if (req.csrfToken) {
+            delete req.csrfToken;
+            delete req.sessionHash;
+          }
 
           var cookieOptions = { domain: _this23.options.cookieDomain };
           res.clearCookie(_this23.options.cookiePrefix + 'sessionhash', cookieOptions);
