@@ -140,23 +140,21 @@ var VBAuth = function () {
 
     // enable query logging
     if (debug.enabled) {
-      (function () {
-        var originalQuery = _this.database.query;
+      var originalQuery = this.database.query;
 
-        _this.database.query = function () {
-          for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
-            args[_key] = arguments[_key];
-          }
+      this.database.query = function () {
+        for (var _len = arguments.length, args = Array(_len), _key = 0; _key < _len; _key++) {
+          args[_key] = arguments[_key];
+        }
 
-          if (args.length === 3) {
-            debug(mysql.format(args[0], args[1]));
-          } else if (args.length === 2) {
-            debug(args[0]);
-          }
+        if (args.length === 3) {
+          debug(mysql.format(args[0], args[1]));
+        } else if (args.length === 2) {
+          debug(args[0]);
+        }
 
-          originalQuery.apply(_this.database, args);
-        };
-      })();
+        originalQuery.apply(_this.database, args);
+      };
     }
   }
 

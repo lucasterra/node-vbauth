@@ -1,6 +1,6 @@
 # Node vBAuth
 
-This module provides SSO (Single Sign-On) support for vBulletin accounts and your Node.js powered website.
+Single Sign-On (SSO) support for vBulletin 4.x accounts and your Node.js powered website.
 
 ## Installing
 ```
